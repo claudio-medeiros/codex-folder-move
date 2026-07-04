@@ -1,0 +1,8 @@
+# local workshop history (predecessor scripts and machine-specific data) — never published
+local-history/
+
+# local tool settings
+.claude/
+
+# OS noise
+.DS_Store

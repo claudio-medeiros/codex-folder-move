@@ -1,0 +1,24 @@
+#!/usr/bin/expect -f
+# Drives the interactive "Restore from backup" menu in a REAL PTY.
+# Args: toolPath codexHome backupDir
+set timeout 30
+lassign $argv tool codexHome backupDir
+
+proc await {pattern} {
+  expect {
+    -exact $pattern {}
+    timeout { puts "\nTIMEOUT waiting for: $pattern"; exit 2 }
+    eof { puts "\nUNEXPECTED EOF waiting for: $pattern"; exit 3 }
+  }
+}
+
+spawn node $tool --codex-home $codexHome --backup-dir $backupDir
+
+await "Choose 1-4: ";                    send "3\r"
+await "(number, q to cancel): ";         send "1\r"
+await {Type "restore" to overwrite};     send "restore\r"
+await "byte-identical to backup."
+await "Choose 1-4: ";                    send "4\r"
+expect eof
+catch wait result
+exit [lindex $result 3]

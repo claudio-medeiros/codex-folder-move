@@ -1,0 +1,31 @@
+#!/usr/bin/expect -f
+# Drives codex-migrate.mjs through a full interactive migration in a REAL PTY,
+# waiting for each prompt before answering — the same path a human at a
+# terminal hits. Args: toolPath codexHome backupDir origin dest
+set timeout 30
+lassign $argv tool codexHome backupDir origin dest
+
+proc await {pattern} {
+  expect {
+    -exact $pattern {}
+    timeout { puts "\nTIMEOUT waiting for: $pattern"; exit 2 }
+    eof { puts "\nUNEXPECTED EOF waiting for: $pattern"; exit 3 }
+  }
+}
+
+spawn node $tool --codex-home $codexHome --backup-dir $backupDir
+
+await "Choose 1-4: ";                    send "1\r"
+await "Origin parent: ";                 send "c\r"
+await "Path: ";                          send "$origin\r"
+await "Destination parent: ";            send "c\r"
+await "Path: ";                          send "$dest\r"
+await "q=cancel: ";                      send "a\r"
+await "q=cancel: ";                      send "d\r"
+await "(y/n): ";                         send "y\r"
+await {Type "migrate" to proceed};       send "migrate\r"
+await "Migration complete."
+await "Choose 1-4: ";                    send "4\r"
+expect eof
+catch wait result
+exit [lindex $result 3]
