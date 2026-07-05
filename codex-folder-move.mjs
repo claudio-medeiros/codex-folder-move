@@ -246,6 +246,15 @@ function sessionFilePaths(file) {
   return paths;
 }
 
+// paths nested inside another discovered project (worktrees, subfolders)
+// migrate with their parent via prefix matching — they'd only clutter the
+// origin/destination pickers as phantom parents
+function nonNestedProjects(projects) {
+  return projects.filter(
+    (project) => !projects.some((other) => other !== project && pathMatches(project.path, other.path)),
+  );
+}
+
 function groupByParent(projects) {
   const groups = new Map();
   for (const project of projects) {
@@ -1161,7 +1170,7 @@ async function migrateFlow(rl) {
   console.log("\nScanning Codex state...");
   const projects = discoverProjects();
   if (!projects.length) return console.log("No Codex projects found.");
-  const groups = groupByParent(projects);
+  const groups = groupByParent(nonNestedProjects(projects));
 
   const originParent = await pickParent(rl, groups, "origin", null);
   if (!originParent) return;

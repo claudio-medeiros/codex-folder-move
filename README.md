@@ -14,6 +14,19 @@ in-place case: your folders moved locally, and every Codex reference — trust
 blocks, sidebar state, sandbox permissions, thread and session paths — should
 follow them.
 
+## What it looks like
+
+![Full interactive migration: scan, pick origin and destination, select projects, confirm, apply](docs/demo.gif)
+
+The checklist shows each project's reference counts, folder status, and any
+blockers before you commit to anything:
+
+![Project checklist with reference counts and folder status](docs/checklist.png)
+
+Nothing is written until you have seen the full plan and typed `migrate`:
+
+![Migration plan summary and explicit confirmation](docs/plan.png)
+
 ## Usage
 
 Close Codex.app fully, then:

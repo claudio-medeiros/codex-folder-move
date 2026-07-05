@@ -501,6 +501,9 @@ test("interactive flow: menus, checklist, confirm, migrate", () => {
   assert(run.status === 0, `exit ${run.status}: ${run.stderr}\n${run.stdout}`);
   assert(run.stdout.includes("Migration complete."), "interactive migration did not complete");
   assert(run.stdout.includes("BLOCKED"), "checklist did not show blocked projects");
+  // the nested worktree thread (plain/worktrees/wt1) must not surface as a
+  // phantom parent option in the pickers — it migrates with "plain"
+  assert(!run.stdout.includes(`${path.join(fx.p.plainOld, "worktrees")}  (`), "nested worktree listed as parent option");
   const config = readConfig(fx);
   assert(config.includes(`[projects."${fx.p.appOneNew}"]`), "config not patched via interactive flow");
   assert(fs.existsSync(path.join(fx.p.appOneNew, "src", "main.js")), "folder not copied via interactive flow");
