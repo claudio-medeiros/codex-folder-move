@@ -40,9 +40,14 @@ Codex state, or type your own), pick the destination parent, tick the projects
 you want from a checklist (with reference counts and blockers per project),
 review the plan, type `migrate` to confirm.
 
-If a project folder hasn't been moved yet, the tool offers to **copy** it to
-the destination. It never deletes the source — you trash the original yourself
-once you're satisfied.
+**You don't need to move any folders beforehand** — the tool handles both
+orders of operation, per project:
+
+- **Folder not moved yet:** it offers to copy the folder to the destination.
+  The copy is verified file by file, and the source is **never deleted** —
+  you trash the original yourself once you're satisfied.
+- **Folder already moved:** it detects that and migrates the Codex metadata
+  only.
 
 Non-interactive equivalents (`--scan`, `--plan`, `--apply`, `--restore`) are
 described in `node codex-folder-move.mjs --help`.
