@@ -7,13 +7,6 @@ the moved folder as a brand-new project.
 Single file, no dependencies beyond Node 18+ and the `sqlite3` CLI. Built and
 tested on macOS (where the Codex desktop app lives in `~/.codex`).
 
-Moving to a **new machine** rather than moving folders on the same one? The
-(unrelated) [Codex Migrate](https://github.com/ChenglongLi777/codex-migrate)
-project imports and merges sessions across devices. This tool solves the
-in-place case: your folders moved locally, and every Codex reference — trust
-blocks, sidebar state, sandbox permissions, thread and session paths — should
-follow them.
-
 ## What it looks like
 
 ![Full interactive migration: scan, pick origin and destination, select projects, confirm, apply](docs/demo.gif)
