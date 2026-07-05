@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
-  codex-migrate — migrate OpenAI Codex desktop-app state when project folders move.
+  codex-folder-move — migrate OpenAI Codex desktop-app state when project folders move.
 
   Design rules:
   - Planning may scan Codex state; apply only touches files listed in the plan.
@@ -43,8 +43,8 @@ const CODEX_HOME = path.resolve(
 );
 const BACKUP_ROOT = path.resolve(
   getArgValue("--backup-dir") ||
-    process.env.CODEX_MIGRATE_BACKUP_DIR ||
-    path.join(os.homedir(), "codex-migrate-backups"),
+    process.env.CODEX_FOLDER_MOVE_BACKUP_DIR ||
+    path.join(os.homedir(), "codex-folder-move-backups"),
 );
 
 const FILES = {
@@ -79,9 +79,9 @@ async function main() {
 }
 
 function printHelp() {
-  console.log(`codex-migrate — move Codex desktop-app state when project folders move
+  console.log(`codex-folder-move — move Codex desktop-app state when project folders move
 
-Interactive (default):   node codex-migrate.mjs
+Interactive (default):   node codex-folder-move.mjs
 
 Non-interactive:
   --scan [--json]                          discover projects grouped by parent folder
@@ -93,7 +93,7 @@ Non-interactive:
 
 Options:
   --codex-home <dir>    Codex state dir (default ~/.codex, or $CODEX_HOME)
-  --backup-dir <dir>    where backups go (default ~/codex-migrate-backups)
+  --backup-dir <dir>    where backups go (default ~/codex-folder-move-backups)
   --projects <list>     comma-separated project folder names (or full paths)
   --copy-folders        copy source folders to destination when missing there
   --yes                 skip the confirmation prompt (apply only)
@@ -570,7 +570,7 @@ function jsonContainsPath(value, oldPath) {
 }
 
 function injectFail(point) {
-  if (process.env.CODEX_MIGRATE_INJECT_FAIL === point) throw new Error(`Injected test failure at ${point}`);
+  if (process.env.CODEX_FOLDER_MOVE_INJECT_FAIL === point) throw new Error(`Injected test failure at ${point}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -688,7 +688,7 @@ function restoreBackup(dir) {
 
 function writeRollbackScript(dir, manifest) {
   const script = `#!/usr/bin/env node
-// Standalone rollback for the codex-migrate backup in this directory.
+// Standalone rollback for the codex-folder-move backup in this directory.
 // Verifies backup checksums, restores every file, removes stray SQLite
 // -wal/-shm files that did not exist at backup time, then re-verifies.
 import fs from "node:fs";
@@ -1138,7 +1138,7 @@ function makePrompter() {
 async function interactiveMain() {
   const rl = makePrompter();
   try {
-    console.log(`codex-migrate — Codex home: ${CODEX_HOME}`);
+    console.log(`codex-folder-move — Codex home: ${CODEX_HOME}`);
     while (true) {
       console.log("\nMain menu");
       console.log("  1. Migrate projects");

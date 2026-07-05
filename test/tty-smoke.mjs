@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
-  Real-terminal (PTY) smoke test for codex-migrate.mjs.
+  Real-terminal (PTY) smoke test for codex-folder-move.mjs.
 
   Uses expect(1) — shipped with macOS — to run the tool inside a genuine
   pseudo-terminal: readline in terminal mode, raw keystrokes, echo, prompts
@@ -10,7 +10,7 @@
   Flow: build fixture → snapshot → PTY migrate session → verify migrated
   state → PTY restore session → verify byte-identical to snapshot.
 
-  Run: node test/tty-smoke.mjs   (optional env CODEX_MIGRATE_TEST_TMP=<dir>)
+  Run: node test/tty-smoke.mjs   (optional env CODEX_FOLDER_MOVE_TEST_TMP=<dir>)
 */
 
 import fs from "node:fs";
@@ -20,7 +20,7 @@ import { spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const TOOL = path.join(TEST_DIR, "..", "codex-migrate.mjs");
+const TOOL = path.join(TEST_DIR, "..", "codex-folder-move.mjs");
 
 function fail(message) {
   console.error(`FAIL  ${message}`);

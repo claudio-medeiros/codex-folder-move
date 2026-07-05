@@ -1,5 +1,5 @@
 #!/usr/bin/expect -f
-# Drives codex-migrate.mjs through a full interactive migration in a REAL PTY,
+# Drives codex-folder-move.mjs through a full interactive migration in a REAL PTY,
 # waiting for each prompt before answering — the same path a human at a
 # terminal hits. Args: toolPath codexHome backupDir origin dest
 set timeout 30

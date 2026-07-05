@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
-  Fixture-based test suite for codex-migrate.mjs.
+  Fixture-based test suite for codex-folder-move.mjs.
 
   Builds fake CODEX_HOMEs inside a temp directory and runs the tool against
   them via --codex-home / --backup-dir. It NEVER touches the real ~/.codex.
@@ -10,7 +10,7 @@
   corrupt jsonl lines, collisions, destination block already in config,
   nested worktree cwds, archived sessions, WAL-stray-safe restore.
 
-  Run: node test/run-tests.mjs   (optional env CODEX_MIGRATE_TEST_TMP=<dir>)
+  Run: node test/run-tests.mjs   (optional env CODEX_FOLDER_MOVE_TEST_TMP=<dir>)
 */
 
 import fs from "node:fs";
@@ -20,10 +20,10 @@ import crypto from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "codex-migrate.mjs");
-const TEST_ROOT = process.env.CODEX_MIGRATE_TEST_TMP
-  ? fs.mkdtempSync(path.join(process.env.CODEX_MIGRATE_TEST_TMP, "codex-migrate-tests-"))
-  : fs.mkdtempSync(path.join(os.tmpdir(), "codex-migrate-tests-"));
+const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "codex-folder-move.mjs");
+const TEST_ROOT = process.env.CODEX_FOLDER_MOVE_TEST_TMP
+  ? fs.mkdtempSync(path.join(process.env.CODEX_FOLDER_MOVE_TEST_TMP, "codex-folder-move-tests-"))
+  : fs.mkdtempSync(path.join(os.tmpdir(), "codex-folder-move-tests-"));
 
 let fixtureCounter = 0;
 const results = [];
@@ -409,7 +409,7 @@ for (const point of ["after-config", "after-global", "mid-sessions", "after-sqli
   test(`injected failure ${point}: automatic byte-identical restore`, () => {
     const fx = makeFixture();
     const before = snapshot(fx);
-    const run = runTool(fx, applyAllArgs(fx), { env: { CODEX_MIGRATE_INJECT_FAIL: point } });
+    const run = runTool(fx, applyAllArgs(fx), { env: { CODEX_FOLDER_MOVE_INJECT_FAIL: point } });
     assert(run.status !== 0, "apply should have failed");
     const output = run.stdout + run.stderr;
     assert(output.includes(`Injected test failure at ${point}`), "injected failure not reported");

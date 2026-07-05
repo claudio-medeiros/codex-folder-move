@@ -1,4 +1,4 @@
-# codex-migrate
+# codex-folder-move
 
 Moves OpenAI Codex desktop-app state when your project folders move, so Codex
 keeps its threads, trust settings, and sandbox permissions instead of treating
@@ -7,12 +7,19 @@ the moved folder as a brand-new project.
 Single file, no dependencies beyond Node 18+ and the `sqlite3` CLI. Built and
 tested on macOS (where the Codex desktop app lives in `~/.codex`).
 
+Moving to a **new machine** rather than moving folders on the same one? The
+(unrelated) [Codex Migrate](https://github.com/ChenglongLi777/codex-migrate)
+project imports and merges sessions across devices. This tool solves the
+in-place case: your folders moved locally, and every Codex reference — trust
+blocks, sidebar state, sandbox permissions, thread and session paths — should
+follow them.
+
 ## Usage
 
 Close Codex.app fully, then:
 
 ```
-node codex-migrate.mjs
+node codex-folder-move.mjs
 ```
 
 The menu walks you through it: pick the origin parent folder (discovered from
@@ -25,7 +32,7 @@ the destination. It never deletes the source — you trash the original yourself
 once you're satisfied.
 
 Non-interactive equivalents (`--scan`, `--plan`, `--apply`, `--restore`) are
-described in `node codex-migrate.mjs --help`.
+described in `node codex-folder-move.mjs --help`.
 
 ## What gets patched
 
@@ -40,7 +47,7 @@ text is never rewritten.
 ## Safety model
 
 - One batch backup of every file to be touched (sha256 manifest) is taken
-  before any write, under `~/codex-migrate-backups/`.
+  before any write, under `~/codex-folder-move-backups/`.
 - Any error mid-apply triggers an automatic, checksum-verified restore.
 - Each backup contains a standalone `rollback.mjs`; the menu also has
   "Restore from backup" (newest first).
