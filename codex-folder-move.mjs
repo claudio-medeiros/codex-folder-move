@@ -29,6 +29,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents } from "node:readline";
 import { stdin as input, stdout as output } from "node:process";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,27 @@ const FILES = {
 const GLOBAL_ROOT_ARRAY_KEYS = ["electron-saved-workspace-roots", "active-workspace-roots", "project-order"];
 const GLOBAL_PATH_MAP_KEYS = ["thread-workspace-root-hints", "thread-projectless-output-directories"];
 const SIDEBAR_PREFIX = "sidebar-project-expanded-v1-codex:";
+
+// Rich-TUI module-level state, declared up here (not down by the functions
+// that use them) because the whole-app shell now enters the alternate screen
+// synchronously at menu-draw time, with no `await` beforehand — so these
+// must already be initialized by the time main() runs, not merely hoisted
+// like the `function` declarations that use them.
+const ESC = "\x1b";
+const BOLD = `${ESC}[1m`;
+const DIM = `${ESC}[2m`;
+const RESET = `${ESC}[0m`;
+const CYAN = `${ESC}[36m`;
+const GREEN = `${ESC}[32m`;
+let richModeActive = false; // only true while the alternate screen is open —
+// guards the exit-safety-net below from writing escape codes into
+// non-interactive output (e.g. --scan/--plan JSON on a piped stdout).
+const MENU_OPTIONS = [
+  { key: "1", label: "Migrate projects", action: "migrate" },
+  { key: "2", label: "Scan Codex state", action: "scan" },
+  { key: "3", label: "Restore from backup", action: "restore" },
+  { key: "4", label: "Quit", action: "quit" },
+];
 
 main().catch((error) => {
   console.error(String(error?.stack || error));
@@ -1036,6 +1058,39 @@ function formatCounts(counts) {
   return `[threads=${c.threads} sessions=${c.sessionFiles} config=${c.config} global=${c.global} ambient=${c.ambientFiles}]`;
 }
 
+// Read-only, cursor-scrollable version of cmdScan() for the interactive rich
+// menu. cmdScan() itself (the --scan/--scan --json CLI path) is untouched.
+async function scanFlowRich(rl) {
+  const projects = discoverProjects();
+  const groups = groupByParent(projects);
+  const rows = groups.flatMap((group) => group.projects.map((project) => ({ group, project })));
+  if (!rows.length) {
+    clearScreen();
+    output.write("No Codex projects found.\r\n\r\nPress enter to go back to the menu.\r\n");
+    await rl.question("");
+    return;
+  }
+  const ctx = { cursor: 0 };
+  const rowText = (index, isCursor) => {
+    const { group, project } = rows[index];
+    const line = `${project.basename}  (${group.parent})`;
+    return styleRow(line, isCursor, output.columns || 80);
+  };
+  const detailLines = (index) => [`counts: ${formatCounts(rows[index].project.counts)}`];
+  const onKey = (key, str) => {
+    if (key?.name === "return" || key?.name === "escape" || str === "q") return "back";
+  };
+  await runRichList(rl, {
+    rows,
+    headerLines: () => [`Codex home: ${CODEX_HOME}`, `Scan — ${rows.length} project(s) across ${groups.length} folder(s)`],
+    rowText,
+    detailLines,
+    footer: "↑/↓ move  q/enter=back to menu",
+    ctx,
+    onKey,
+  });
+}
+
 function resolveNonInteractiveSelection() {
   const origin = getArgValue("--origin");
   const dest = getArgValue("--dest");
@@ -1113,18 +1168,27 @@ function cmdRestore() {
 // piped/scripted input delivers everything in one chunk, so buffer lines
 // in a queue and hand them out one question at a time
 function makePrompter() {
-  const rl = createInterface({ input, output });
+  let rl = createInterface({ input, output });
   const queue = [];
   const waiters = [];
   let closed = false;
-  rl.on("line", (line) => {
-    if (waiters.length) waiters.shift()({ line });
-    else queue.push(line);
-  });
-  rl.on("close", () => {
-    closed = true;
-    while (waiters.length) waiters.shift()({ eof: true });
-  });
+  let tearingDown = false; // true while we intentionally close/reopen the
+
+  // interface around a raw-mode rich-UI session (see pauseForRawMode below) —
+  // distinguishes that from a real EOF on stdin.
+  function wire(instance) {
+    instance.on("line", (line) => {
+      if (waiters.length) waiters.shift()({ line });
+      else queue.push(line);
+    });
+    instance.on("close", () => {
+      if (tearingDown) return;
+      closed = true;
+      while (waiters.length) waiters.shift()({ eof: true });
+    });
+  }
+  wire(rl);
+
   return {
     async question(promptText) {
       if (queue.length) {
@@ -1141,40 +1205,106 @@ function makePrompter() {
     close() {
       rl.close();
     },
+    // The rich (alternate-screen, raw-key) UI needs exclusive control of
+    // stdin's keypress events. A live readline.Interface reacts to every
+    // keypress on its own (line editing, echo), so it has to be fully torn
+    // down while the rich UI runs, then rebuilt identically afterwards.
+    pauseForRawMode() {
+      tearingDown = true;
+      rl.close();
+      process.nextTick(() => {
+        tearingDown = false;
+      });
+    },
+    resumeFromRawMode() {
+      rl = createInterface({ input, output });
+      wire(rl);
+    },
   };
 }
 
 async function interactiveMain() {
   const rl = makePrompter();
   try {
-    console.log(`codex-folder-move — Codex home: ${CODEX_HOME}`);
-    while (true) {
-      console.log("\nMain menu");
-      console.log("  1. Migrate projects");
-      console.log("  2. Scan Codex state");
-      console.log("  3. Restore from backup");
-      console.log("  4. Quit");
-      const answer = (await rl.question("Choose 1-4: ")).trim();
-      if (answer === "1") await migrateFlow(rl);
-      else if (answer === "2") cmdScan();
-      else if (answer === "3") await restoreFlow(rl);
-      else if (answer === "4" || answer.toLowerCase() === "q") return console.log("No action taken. Bye.");
-      else console.log("Invalid choice.");
-    }
+    if (supportsRichTTY()) await interactiveMainRich(rl);
+    else await interactiveMainPlain(rl);
   } finally {
     rl.close();
   }
 }
 
+async function interactiveMainPlain(rl) {
+  console.log(`codex-folder-move — Codex home: ${CODEX_HOME}`);
+  while (true) {
+    console.log("\nMain menu");
+    console.log("  1. Migrate projects");
+    console.log("  2. Scan Codex state");
+    console.log("  3. Restore from backup");
+    console.log("  4. Quit");
+    const answer = (await rl.question("Choose 1-4: ")).trim();
+    if (answer === "1") await migrateFlowPlain(rl);
+    else if (answer === "2") cmdScan();
+    else if (answer === "3") await restoreFlowPlain(rl);
+    else if (answer === "4" || answer.toLowerCase() === "q") return console.log("No action taken. Bye.");
+    else console.log("Invalid choice.");
+  }
+}
+
+// One alternate-screen session per menu cycle: entered fresh at the top of
+// every loop iteration, kept open through the whole chosen flow's navigation
+// (pickers/checklist/summary), and closed by that flow itself right before
+// it prints anything the user should keep in real scrollback. See
+// migrateFlowRich/scanFlowRich/restoreFlowRich for how each flow honors that.
+async function interactiveMainRich(rl) {
+  while (true) {
+    enterAltScreen();
+    clearScreen();
+    const ctx = { cursor: 0 };
+    const rowText = (index, isCursor) => styleRow(`${MENU_OPTIONS[index].key}. ${MENU_OPTIONS[index].label}`, isCursor, output.columns || 80);
+    const onKey = (key, str) => {
+      const direct = MENU_OPTIONS.findIndex((option) => option.key === str);
+      if (direct >= 0) {
+        ctx.cursor = direct;
+        return "done";
+      }
+      if (key?.name === "return") return "done";
+      if (key?.name === "escape" || str === "q") return "quit-key";
+    };
+    const result = await runRichList(rl, {
+      rows: MENU_OPTIONS,
+      headerLines: () => [`codex-folder-move — ${CODEX_HOME}`, "Main menu"],
+      rowText,
+      detailLines: null,
+      footer: "↑/↓ move  enter=select  1-4=jump  q=quit",
+      ctx,
+      onKey,
+    });
+    const action = result === "quit-key" ? "quit" : MENU_OPTIONS[ctx.cursor].action;
+    if (action === "quit") {
+      exitAltScreen();
+      console.log("No action taken. Bye.");
+      return;
+    }
+    if (action === "migrate") await migrateFlowRich(rl);
+    else if (action === "scan") await scanFlowRich(rl);
+    else if (action === "restore") await restoreFlowRich(rl);
+  }
+}
+
 async function migrateFlow(rl) {
+  if (supportsRichTTY()) return migrateFlowRich(rl);
+  return migrateFlowPlain(rl);
+}
+
+async function migrateFlowPlain(rl) {
   console.log("\nScanning Codex state...");
   const projects = discoverProjects();
   if (!projects.length) return console.log("No Codex projects found.");
   const groups = groupByParent(nonNestedProjects(projects));
 
-  const originParent = await pickParent(rl, groups, "origin", null);
+  const originParent = await pickParentPlain(rl, groups, "origin", null);
   if (!originParent) return;
-  const destinationParent = await pickParent(rl, groups, "destination", originParent);
+  const destinationParent = await pickParentPlain(rl, groups, "destination", originParent);
   if (!destinationParent) return;
   if (!fs.existsSync(destinationParent)) {
     const create = (await rl.question(`Destination parent does not exist. Create ${destinationParent}? (y/n): `)).trim().toLowerCase();
@@ -1186,7 +1316,7 @@ async function migrateFlow(rl) {
   const entries = buildProjectEntries(projects, originParent, destinationParent);
   if (!entries.length) return console.log(`Nothing found under ${originParent}.`);
 
-  const selected = await checklist(rl, entries);
+  const selected = await checklistPlain(rl, entries);
   if (!selected || !selected.length) return console.log("Nothing selected. Cancelled.");
 
   let copyFolders = false;
@@ -1211,7 +1341,362 @@ async function migrateFlow(rl) {
   applyPlan(plan);
 }
 
+// Alt-screen is entered once by interactiveMainRich right before dispatching
+// here and stays open through every picker/checklist/summary screen below —
+// this function's only job is to call exitAltScreen() exactly once, right
+// before it needs to print something the user should keep in real scrollback
+// (a cancellation, or the actual apply's output), then do that printing with
+// plain console.log/applyPlan exactly like the plain flow does.
+async function migrateFlowRich(rl) {
+  const projects = discoverProjects();
+  if (!projects.length) {
+    exitAltScreen();
+    console.log("No Codex projects found.");
+    return;
+  }
+  const groups = groupByParent(nonNestedProjects(projects));
+
+  const originParent = await pickParentRich(rl, groups, "origin", null);
+  if (!originParent) {
+    exitAltScreen();
+    return;
+  }
+  const destinationParent = await pickParentRich(rl, groups, "destination", originParent);
+  if (!destinationParent) {
+    exitAltScreen();
+    return;
+  }
+  if (!fs.existsSync(destinationParent)) {
+    clearScreen();
+    const create = (
+      await rl.question(`Destination parent does not exist. Create ${destinationParent}? (y/n): `)
+    ).trim().toLowerCase();
+    if (create !== "y") {
+      exitAltScreen();
+      console.log("Cancelled.");
+      return;
+    }
+    fs.mkdirSync(destinationParent, { recursive: true });
+  }
+
+  const entries = buildProjectEntries(projects, originParent, destinationParent);
+  if (!entries.length) {
+    exitAltScreen();
+    console.log(`Nothing found under ${originParent}.`);
+    return;
+  }
+
+  const selected = await checklistRich(rl, entries);
+  if (!selected || !selected.length) {
+    exitAltScreen();
+    console.log("Nothing selected. Cancelled.");
+    return;
+  }
+
+  let copyFolders = false;
+  const needCopy = selected.filter((entry) => entry.folderAction === "copy");
+  if (needCopy.length) {
+    clearScreen();
+    output.write(
+      [`${needCopy.length} selected project(s) have no folder at the destination yet:`, ...needCopy.map((e) => `  ${e.oldPath}`), ""].join(
+        "\r\n",
+      ),
+    );
+    const answer = (
+      await rl.question("\nCopy these folders to the destination? Sources are never deleted. (y/n): ")
+    ).trim().toLowerCase();
+    copyFolders = answer === "y";
+  }
+
+  const plan = buildPlan(originParent, destinationParent, selected, copyFolders);
+  clearScreen();
+  output.write(
+    [
+      ...planSummaryLines(plan, []),
+      "",
+      `A full backup of all ${plan.touchedFiles.length} touched files is taken first.`,
+      "Any error triggers an automatic checksum-verified restore.",
+      "",
+    ].join("\r\n"),
+  );
+  const confirm = (await rl.question('Type "migrate" to proceed, anything else to cancel: ')).trim();
+  exitAltScreen();
+  if (confirm !== "migrate") return console.log("Cancelled. Nothing was changed.");
+
+  applyPlan(plan);
+}
+
+// ---------------------------------------------------------------------------
+// Rich interactive TUI (alternate screen, raw keys, cursor + detail pane)
+// ---------------------------------------------------------------------------
+// Automatically falls back to the plain line-mode prompts above whenever
+// stdin/stdout aren't a real TTY (piped fixture tests, non-interactive
+// scripts), so that path stays exactly as it was — untouched, still tested
+// by every existing fixture case.
+
+function supportsRichTTY() {
+  return Boolean(input.isTTY && output.isTTY);
+}
+
+function enterAltScreen() {
+  richModeActive = true;
+  output.write(`${ESC}[?1049h${ESC}[?25l`);
+}
+function exitAltScreen() {
+  output.write(`${ESC}[?25h${ESC}[?1049l`);
+  richModeActive = false;
+}
+function clearScreen() {
+  output.write(`${ESC}[2J${ESC}[H`);
+}
+
+// Never leave the user's shell stuck in raw mode / the alternate screen if
+// the process dies mid-session. Covers two distinct paths: (1) an uncaught
+// error or a plain process.exit() call, which reliably fires the "exit"
+// event; (2) an external signal (SIGINT/SIGTERM — e.g. `kill`, a supervisor,
+// or Ctrl+C reaching the process while ISIG is still enabled somewhere
+// upstream) which does NOT fire "exit" unless something calls process.exit()
+// in response — Node's default disposition for an unhandled signal
+// terminates the process directly, bypassing "exit" entirely. A literal
+// Ctrl+C keystroke *while our own raw mode is active* is handled separately,
+// in-band, by runRichList's keypress handler (hardAbort), since setRawMode
+// disables ISIG and the keystroke never becomes a signal in that case.
+function restoreTerminalNow() {
+  if (!richModeActive) return;
+  if (input.isTTY && input.isRaw) input.setRawMode(false);
+  output.write(`${ESC}[?25h${ESC}[?1049l`);
+  richModeActive = false;
+}
+process.on("exit", restoreTerminalNow);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    restoreTerminalNow();
+    process.exit(128 + (signal === "SIGINT" ? 2 : 15));
+  });
+}
+
+function captureRawKeys(rl) {
+  rl.pauseForRawMode();
+  emitKeypressEvents(input);
+  if (input.isTTY) input.setRawMode(true);
+  input.resume();
+}
+function releaseRawKeys(rl) {
+  if (input.isTTY) input.setRawMode(false);
+  rl.resumeFromRawMode();
+}
+
+function hardAbort(rl) {
+  releaseRawKeys(rl);
+  exitAltScreen();
+  process.exit(130);
+}
+
+// Cursor position is marked with a "▶ " prefix plus bold/color text — not
+// bare reverse-video. Reverse-video alone doesn't read as clearly across
+// terminal color schemes, and (see the bug this replaced) is fragile: pad a
+// reverse-video line to the column width, wrap it in escape codes, then
+// truncate the RESULT by raw character count, and the reset code itself gets
+// sliced off — the highlight then never turns back off and bleeds into every
+// row after it. Fix: truncate the plain text to width first, wrap in escape
+// codes after, and never touch the styled string's length again.
+function cursorArrow(isCursor) {
+  return isCursor ? "▶ " : "  ";
+}
+function styleText(plainText, isCursor, width) {
+  const budget = Math.max(1, width);
+  const truncated = plainText.length > budget ? plainText.slice(0, budget - 1) + "…" : plainText;
+  return isCursor ? `${BOLD}${CYAN}${truncated}${RESET}` : truncated;
+}
+// Convenience for the common case: arrow prefix + styled text, nothing between.
+function styleRow(plainText, isCursor, width) {
+  return cursorArrow(isCursor) + styleText(plainText, isCursor, Math.max(1, width - 2));
+}
+
+// Cursor-driven, scrollable list rendered in the alternate screen. Callers
+// own the alternate-screen lifecycle (enterAltScreen/exitAltScreen) — this
+// function only owns raw-key capture and the render loop, so a flow can call
+// it several times in a row (origin picker, destination picker, checklist)
+// without the screen flashing in and out between each one. `onKey` mutates
+// `ctx` as needed and returns a token to end the loop (anything other than
+// undefined); the caller decides what each token means.
+async function runRichList(rl, { rows, headerLines, rowText, detailLines, footer, ctx, onKey }) {
+  captureRawKeys(rl);
+  let offset = 0;
+  let listHeight = 1;
+  const render = () => {
+    const cols = output.columns || 80;
+    const termRows = output.rows || 24;
+    const detailHeight = detailLines ? 5 : 0;
+    const chrome = headerLines().length + 1 + (detailHeight ? detailHeight + 2 : 0) + 1;
+    listHeight = Math.max(3, termRows - chrome);
+    if (ctx.cursor < offset) offset = ctx.cursor;
+    if (ctx.cursor >= offset + listHeight) offset = ctx.cursor - listHeight + 1;
+    offset = Math.max(0, Math.min(offset, Math.max(0, rows.length - listHeight)));
+    const visible = rows.slice(offset, offset + listHeight);
+
+    const out = [...headerLines(), ""];
+    visible.forEach((_, i) => {
+      const index = offset + i;
+      out.push(rowText(index, index === ctx.cursor));
+    });
+    for (let i = visible.length; i < listHeight; i++) out.push("");
+    if (detailHeight) {
+      out.push("─".repeat(Math.min(cols, 70)));
+      const lines = rows.length ? detailLines(ctx.cursor) : [];
+      for (let i = 0; i < detailHeight; i++) out.push((lines[i] || "").slice(0, cols));
+      out.push("─".repeat(Math.min(cols, 70)));
+    }
+    out.push(footer.slice(0, cols));
+    clearScreen();
+    output.write(out.join("\r\n"));
+  };
+  render();
+  const onResize = () => render();
+  output.on("resize", onResize);
+  try {
+    return await new Promise((resolve) => {
+      const onKeypress = (str, key) => {
+        if (key?.ctrl && key.name === "c") return hardAbort(rl);
+        if (key?.name === "pageup" || str === "<") ctx.cursor = Math.max(0, ctx.cursor - listHeight);
+        else if (key?.name === "pagedown" || str === ">") ctx.cursor = Math.min(rows.length - 1, ctx.cursor + listHeight);
+        else if (key?.name === "up") ctx.cursor = Math.max(0, ctx.cursor - 1);
+        else if (key?.name === "down") ctx.cursor = Math.min(rows.length - 1, ctx.cursor + 1);
+        else {
+          const result = onKey(key, str, ctx);
+          if (result !== undefined) {
+            input.removeListener("keypress", onKeypress);
+            resolve(result);
+            return;
+          }
+        }
+        render();
+      };
+      input.on("keypress", onKeypress);
+    });
+  } finally {
+    output.removeListener("resize", onResize);
+    releaseRawKeys(rl);
+  }
+}
+
+async function pickCustomPath(rl, label, exclude) {
+  while (true) {
+    const custom = (await rl.question(`${capitalize(label)} parent — custom path (blank to cancel): `)).trim();
+    if (!custom) return null;
+    const normalized = normalizePath(custom);
+    if (normalized === exclude) {
+      console.log("Origin and destination must differ.");
+      continue;
+    }
+    return normalized;
+  }
+}
+
+async function pickParentRich(rl, groups, label, exclude) {
+  const options = groups.filter((group) => group.parent !== exclude);
+  if (!options.length) return pickCustomPath(rl, label, exclude);
+
+  const ctx = { cursor: 0 };
+  const rowText = (index, isCursor) => {
+    const group = options[index];
+    const line = `${String(index + 1).padStart(3)}. ${group.parent}  (${group.projects.length} Codex project${group.projects.length === 1 ? "" : "s"})`;
+    return styleRow(line, isCursor, output.columns || 80);
+  };
+  const onKey = (key, str) => {
+    if (key?.name === "return") return "done";
+    if (str === "c") return "custom";
+    if (key?.name === "escape" || str === "q") return "cancel";
+  };
+  const result = await runRichList(rl, {
+    rows: options,
+    headerLines: () => [`Select the ${label} parent folder (the folder that contains your projects):`],
+    rowText,
+    detailLines: null,
+    footer: "↑/↓ move  enter=select  c=custom path  q=cancel",
+    ctx,
+    onKey,
+  });
+  if (result === "cancel") return null;
+  if (result === "custom") return pickCustomPath(rl, label, exclude);
+  return options[ctx.cursor].parent;
+}
+
+function folderStatusWord(entry) {
+  if (entry.folderAction === "copy") return "needs folder copy";
+  if (entry.oldExists && entry.destExists) return "folder on both sides";
+  if (entry.destExists) return "folder at destination";
+  return "folder missing both sides";
+}
+
+async function checklistRich(rl, entries) {
+  const eligibleIndexes = entries.map((entry, index) => (entry.eligible ? index : -1)).filter((i) => i >= 0);
+  const checked = new Set();
+  const ctx = { cursor: 0 };
+
+  const rowText = (index, isCursor) => {
+    const entry = entries[index];
+    const mark = !entry.eligible ? `${DIM} ✗ ${RESET}` : checked.has(index) ? `${GREEN}${BOLD}[x]${RESET}` : "[ ]";
+    const status = entry.eligible ? folderStatusWord(entry) : "BLOCKED";
+    const line = `${String(index + 1).padStart(3)}. ${path.basename(entry.oldPath)}  —  ${status}`;
+    const budget = (output.columns || 80) - 6;
+    const styledLine = entry.eligible ? styleText(line, isCursor, budget) : `${DIM}${styleText(line, false, budget)}${RESET}`;
+    return `${cursorArrow(isCursor)}${mark} ${styledLine}`;
+  };
+  const detailLines = (index) => {
+    const entry = entries[index];
+    const lines = [entry.oldPath, `  -> ${entry.newPath}`];
+    if (entry.refs) {
+      const r = entry.refs;
+      lines.push(
+        `  threads=${r.sqliteCwdOld} sandbox=${r.sqliteSandboxOld} sessions=${r.sessionFiles.length} config=${r.configBlocksOld} global=${r.globalRefsOld} ambient=${r.ambientFiles.length}`,
+      );
+    }
+    if (entry.blockers.length) lines.push(`  BLOCKED: ${entry.blockers.join("; ")}`);
+    for (const warning of entry.warnings) lines.push(`  note: ${warning}`);
+    return lines;
+  };
+  const onKey = (key, str) => {
+    if (key?.name === "space") {
+      const entry = entries[ctx.cursor];
+      if (entry.eligible) {
+        if (checked.has(ctx.cursor)) checked.delete(ctx.cursor);
+        else checked.add(ctx.cursor);
+      }
+    } else if (str === "a") {
+      for (const i of eligibleIndexes) checked.add(i);
+    } else if (str === "n") {
+      checked.clear();
+    } else if (key?.name === "return" || str === "d") {
+      return "done";
+    } else if (key?.name === "escape" || str === "q") {
+      return "cancel";
+    }
+  };
+  const result = await runRichList(rl, {
+    rows: entries,
+    headerLines: () => [`codex-folder-move — ${entries.length} project(s), ${checked.size} selected`],
+    rowText,
+    detailLines,
+    footer: "↑/↓ move  space toggle  a=all eligible  n=none  enter/d=done  q=cancel",
+    ctx,
+    onKey,
+  });
+  if (result === "cancel") return null;
+  return [...checked].sort((a, b) => a - b).map((i) => entries[i]);
+}
+
 async function pickParent(rl, groups, label, exclude) {
+  if (supportsRichTTY()) return pickParentRich(rl, groups, label, exclude);
+  return pickParentPlain(rl, groups, label, exclude);
+}
+
+async function checklist(rl, entries) {
+  if (supportsRichTTY()) return checklistRich(rl, entries);
+  return checklistPlain(rl, entries);
+}
+
+async function pickParentPlain(rl, groups, label, exclude) {
   const options = groups.filter((group) => group.parent !== exclude);
   console.log(`\nSelect the ${label} parent folder (the folder that contains your projects):`);
   options.forEach((group, index) => {
@@ -1238,7 +1723,7 @@ async function pickParent(rl, groups, label, exclude) {
   }
 }
 
-async function checklist(rl, entries) {
+async function checklistPlain(rl, entries) {
   const pageSize = 10;
   let page = 0;
   const checked = new Set(); // indexes into entries
@@ -1334,31 +1819,40 @@ function parseSelection(text, max) {
   return out.size ? [...out] : null;
 }
 
-function printPlanSummary(plan, notEligible) {
-  console.log("\nMigration plan");
-  console.log(`  Origin parent:      ${plan.originParent}`);
-  console.log(`  Destination parent: ${plan.destinationParent}`);
-  console.log(`  Projects:           ${plan.projects.length}`);
+function planSummaryLines(plan, notEligible) {
+  const lines = ["Migration plan"];
+  lines.push(`  Origin parent:      ${plan.originParent}`);
+  lines.push(`  Destination parent: ${plan.destinationParent}`);
+  lines.push(`  Projects:           ${plan.projects.length}`);
   for (const project of plan.projects) {
     const e = project.expected;
-    console.log(`    ${path.basename(project.oldPath)}  [${project.folderAction}]`);
-    console.log(`      ${project.oldPath} -> ${project.newPath}`);
-    console.log(
+    lines.push(`    ${path.basename(project.oldPath)}  [${project.folderAction}]`);
+    lines.push(`      ${project.oldPath} -> ${project.newPath}`);
+    lines.push(
       `      threads=${e.sqliteCwdOld} sandbox=${e.sqliteSandboxOld} sessions=${e.sessionFiles} config=${e.configBlocksOld} global=${e.globalRefsOld} ambient=${e.ambientFiles}`,
     );
-    for (const warning of project.warnings) console.log(`      note: ${warning}`);
+    for (const warning of project.warnings) lines.push(`      note: ${warning}`);
   }
   if (plan.folderCopies.length) {
-    console.log(`  Folder copies (source never deleted): ${plan.folderCopies.length}`);
+    lines.push(`  Folder copies (source never deleted): ${plan.folderCopies.length}`);
   }
-  console.log(`  Files to modify: ${plan.touchedFiles.length}`);
-  console.log(`  Backup location: ${BACKUP_ROOT}`);
+  lines.push(`  Files to modify: ${plan.touchedFiles.length}`);
+  lines.push(`  Backup location: ${BACKUP_ROOT}`);
   for (const entry of notEligible || []) {
-    console.log(`  NOT ELIGIBLE: ${entry.oldPath} (${entry.blockers.join("; ")})`);
+    lines.push(`  NOT ELIGIBLE: ${entry.oldPath} (${entry.blockers.join("; ")})`);
   }
+  return lines;
+}
+function printPlanSummary(plan, notEligible) {
+  console.log("\n" + planSummaryLines(plan, notEligible).join("\n"));
 }
 
 async function restoreFlow(rl) {
+  if (supportsRichTTY()) return restoreFlowRich(rl);
+  return restoreFlowPlain(rl);
+}
+
+async function restoreFlowPlain(rl) {
   const backups = listBackups();
   if (!backups.length) return console.log(`No backups found under ${BACKUP_ROOT}`);
   console.log("\nBackups (newest first):");
@@ -1376,6 +1870,43 @@ async function restoreFlow(rl) {
   if (confirm !== "restore") return console.log("Cancelled.");
   ensureCodexClosed();
   restoreBackup(dir);
+}
+
+async function restoreFlowRich(rl) {
+  const backups = listBackups();
+  if (!backups.length) {
+    exitAltScreen();
+    console.log(`No backups found under ${BACKUP_ROOT}`);
+    return;
+  }
+  const visible = backups.slice(0, 15);
+  const ctx = { cursor: 0 };
+  const rowText = (index, isCursor) => styleRow(visible[index].name, isCursor, output.columns || 80);
+  const onKey = (key, str) => {
+    if (key?.name === "return") return "done";
+    if (key?.name === "escape" || str === "q") return "cancel";
+  };
+  const result = await runRichList(rl, {
+    rows: visible,
+    headerLines: () => ["Backups (newest first):"],
+    rowText,
+    detailLines: null,
+    footer: "↑/↓ move  enter=select  q=cancel",
+    ctx,
+    onKey,
+  });
+  if (result === "cancel") {
+    exitAltScreen();
+    return;
+  }
+  const chosen = visible[ctx.cursor];
+  clearScreen();
+  output.write(`Selected: ${chosen.name}\r\n\r\n`);
+  const confirm = (await rl.question(`Type "restore" to overwrite current Codex state from ${chosen.name}: `)).trim();
+  exitAltScreen();
+  if (confirm !== "restore") return console.log("Cancelled.");
+  ensureCodexClosed();
+  restoreBackup(chosen.dir);
 }
 
 // ---------------------------------------------------------------------------

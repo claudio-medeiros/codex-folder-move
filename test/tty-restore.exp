@@ -1,5 +1,8 @@
 #!/usr/bin/expect -f
-# Drives the interactive "Restore from backup" menu in a REAL PTY.
+# Drives the interactive "Restore from backup" flow in a REAL PTY. The main
+# menu and the backup list are both the rich alternate-screen UI now: a
+# direct number keypress (no \r) jumps into the menu option, and the backup
+# list is a cursor pick (enter selects) rather than typing a number.
 # Args: toolPath codexHome backupDir
 set timeout 30
 lassign $argv tool codexHome backupDir
@@ -14,11 +17,11 @@ proc await {pattern} {
 
 spawn node $tool --codex-home $codexHome --backup-dir $backupDir
 
-await "Choose 1-4: ";                    send "3\r"
-await "(number, q to cancel): ";         send "1\r"
+await "Main menu";                       send "3"
+await "Backups (newest first)";          send "\r"
 await {Type "restore" to overwrite};     send "restore\r"
 await "byte-identical to backup."
-await "Choose 1-4: ";                    send "4\r"
+await "Main menu";                       send "4"
 expect eof
 catch wait result
 exit [lindex $result 3]

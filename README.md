@@ -9,16 +9,70 @@ tested on macOS (where the Codex desktop app lives in `~/.codex`).
 
 ## What it looks like
 
-![Full interactive migration: scan, pick origin and destination, select projects, confirm, apply](docs/demo.gif)
+The interactive flow uses a rich terminal UI with arrow-key navigation, color,
+and real-time feedback:
 
-The checklist shows each project's reference counts, folder status, and any
-blockers before you commit to anything:
+**Main menu** — four options, jumpable by number:
+```
+codex-folder-move — ~/.codex
+Main menu
 
-![Project checklist with reference counts and folder status](docs/checklist.png)
+▶ 1. Migrate projects
+  2. Scan Codex state
+  3. Restore from backup
+  4. Quit
 
-Nothing is written until you have seen the full plan and typed `migrate`:
+↑/↓ move  enter=select  1-4=jump  q=quit
+```
 
-![Migration plan summary and explicit confirmation](docs/plan.png)
+**Project checklist** — navigate with arrows, toggle with space, see details
+live and blockers marked:
+```
+codex-folder-move — 5 project(s), 3 selected
+
+▶ [x]   1. App One  —  needs folder copy
+  [x]   2. Bob's App  —  folder at destination
+  ✗ [2m 3. collide  —  BLOCKED
+  ✓ [0m 4. no-meta-folder  —  BLOCKED
+  [x]   5. plain  —  needs folder copy
+
+──────────────────────────────────────────────────────────────────────
+/origin/App One
+  -> /destination/App One
+  threads=1 sandbox=0 sessions=1 config=1 global=6 ambient=1
+──────────────────────────────────────────────────────────────────────
+
+↑/↓ move  space toggle  a=all eligible  n=none  enter/d=done  q=cancel
+```
+
+The plan summary (before final confirmation) shows all affected files and
+reference counts:
+
+```
+Migration plan
+  Origin parent:      /origin
+  Destination parent: /destination
+  Projects:           3
+    App One  [copy]
+      threads=1 sandbox=0 sessions=1 config=1 global=6 ambient=1
+    Bob's App  [metadata-only]
+      note: destination already known to Codex; entries will merge
+  Folder copies (source never deleted): 2
+  Files to modify: 9
+  Backup location: ~/codex-folder-move-backups/…
+
+Type "migrate" to proceed, anything else to cancel:
+```
+
+**Restore flow** — pick a backup from a scrollable list, confirm restore:
+```
+Backups (newest first):
+
+▶ migration-2026-07-06T22-25-53-973Z
+  …(older backups below)
+
+↑/↓ move  enter=select  q=cancel
+```
 
 ## Usage
 

@@ -1,7 +1,10 @@
 #!/usr/bin/expect -f
-# Drives codex-folder-move.mjs through a full interactive migration in a REAL PTY,
-# waiting for each prompt before answering — the same path a human at a
-# terminal hits. Args: toolPath codexHome backupDir origin dest
+# Drives codex-folder-move.mjs through a full interactive migration in a REAL
+# PTY. The origin/destination pickers and the project checklist now run the
+# rich alternate-screen UI: single raw keypresses (no \r) for navigation,
+# toggles, and the a/n/d/q/c shortcuts. \r is only sent for real line prompts
+# (custom-path text entry, the folder-copy y/n, the "migrate" confirmation).
+# Args: toolPath codexHome backupDir origin dest
 set timeout 30
 lassign $argv tool codexHome backupDir origin dest
 
@@ -15,17 +18,38 @@ proc await {pattern} {
 
 spawn node $tool --codex-home $codexHome --backup-dir $backupDir
 
-await "Choose 1-4: ";                    send "1\r"
-await "Origin parent: ";                 send "c\r"
-await "Path: ";                          send "$origin\r"
-await "Destination parent: ";            send "c\r"
-await "Path: ";                          send "$dest\r"
-await "q=cancel: ";                      send "a\r"
-await "q=cancel: ";                      send "d\r"
+# Main menu is now a rich cursor list too — a direct number keypress (no \r)
+# jumps to and immediately selects that option.
+await "Main menu";                       send "1"
+
+# Origin picker: rich alt-screen list (fx.origin is a real discovered group,
+# so the list is never empty here) — 'c' drops to a plain custom-path prompt.
+await "Select the origin parent folder"; send "c"
+await "custom path (blank to cancel)";   send "$origin\r"
+
+# Destination picker: rich list if any other project groups remain once the
+# origin is excluded, otherwise the picker falls straight to the same
+# custom-path prompt with no list screen at all. Handle both.
+expect {
+  -exact "Select the destination parent folder" {
+    send "c"
+    await "custom path (blank to cancel)"
+    send "$dest\r"
+  }
+  -exact "custom path (blank to cancel)" {
+    send "$dest\r"
+  }
+  timeout { puts "\nTIMEOUT waiting for destination picker"; exit 2 }
+  eof { puts "\nUNEXPECTED EOF waiting for destination picker"; exit 3 }
+}
+
+# Checklist: rich alt-screen list — select all eligible, then confirm.
+await "codex-folder-move — ";            send "a"
+send "d"
 await "(y/n): ";                         send "y\r"
 await {Type "migrate" to proceed};       send "migrate\r"
 await "Migration complete."
-await "Choose 1-4: ";                    send "4\r"
+await "Main menu";                       send "4"
 expect eof
 catch wait result
 exit [lindex $result 3]

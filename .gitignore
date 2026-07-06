@@ -4,5 +4,10 @@ local-history/
 # local tool settings
 .claude/
 
+# local-only project memory (Claudio's working notes — never published)
+context/
+projects/
+decisions/
+
 # OS noise
 .DS_Store
