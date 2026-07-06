@@ -1059,12 +1059,10 @@ function formatCounts(counts) {
 }
 
 // Read-only, cursor-scrollable version of cmdScan() for the interactive rich
-// menu. Filters out nested projects (worktrees, subfolders) to match Migrate's
-// project picker — avoid showing both parent and child in the same list.
-// cmdScan() itself (the --scan/--scan --json CLI path) is untouched.
+// menu. cmdScan() itself (the --scan/--scan --json CLI path) is untouched.
 async function scanFlowRich(rl) {
   const projects = discoverProjects();
-  const groups = groupByParent(nonNestedProjects(projects));
+  const groups = groupByParent(projects);
   const rows = groups.flatMap((group) => group.projects.map((project) => ({ group, project })));
   if (!rows.length) {
     clearScreen();
