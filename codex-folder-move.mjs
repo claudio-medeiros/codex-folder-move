@@ -270,10 +270,11 @@ function sessionFilePaths(file) {
 
 // paths nested inside another discovered project (worktrees, subfolders)
 // migrate with their parent via prefix matching — they'd only clutter the
-// origin/destination pickers as phantom parents
+// origin/destination pickers as phantom parents.
+// Remove project A if it's nested in project B (i.e., A's path starts with B + "/").
 function nonNestedProjects(projects) {
   return projects.filter(
-    (project) => !projects.some((other) => other !== project && pathMatches(project.path, other.path)),
+    (project) => !projects.some((other) => other !== project && pathMatches(project.path, other.path + "/")),
   );
 }
 
